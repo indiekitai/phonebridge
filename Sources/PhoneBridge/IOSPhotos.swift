@@ -32,6 +32,9 @@ final class IOSPhotoLibrary: NSObject, ObservableObject {
     private var downloadDone: ((Result<Int, Error>) -> Void)?
     private var downloadedCount = 0
     private var emptyRetries = 0
+    /// Name of the phone we were showing when its photo device dropped; reopened when it returns.
+    private var reconnectName: String?
+    private var reconnects = 0
 
     override init() {
         super.init()
@@ -48,26 +51,37 @@ final class IOSPhotoLibrary: NSObject, ObservableObject {
 
     func hasCamera(named name: String) -> Bool { cameras.contains { $0.name == name } }
 
-    func open(name: String) {
+    func open(name: String, keepRetryCount: Bool = false) {
+        if !keepRetryCount { reconnects = 0; reconnectName = nil }
         guard let cam = cameras.first(where: { $0.name == name }) else {
-            status = .failed(Self.replugHint)
+            PBLog.write("photos: no ImageCapture device named \(name); have \(cameraNames)")
+            status = .failed("系统里还没有这台 iPhone 的照片通道。请解锁手机；还不行就拔插一次数据线。")
             return
         }
-        if current === cam, status == .ready || status == .opening { return }
+        if current === cam, status == .ready || (status == .opening && current != nil) { return }
         close()
         emptyRetries = 0
         current = cam
         cam.delegate = self
+        PBLog.write("photos: open \(name) hasOpenSession=\(cam.hasOpenSession)")
         status = .opening
-        cam.requestOpenSession()
-        // If the system photo service never answers, don't leave the user waiting.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak cam] in
-            guard let self, let cam, cam === self.current, self.status == .opening else { return }
-            self.status = .failed(Self.replugHint)
-        }
+        if !cam.hasOpenSession { cam.requestOpenSession() }
+        armTimeout()
     }
 
-    static let replugHint = "读不到这台 iPhone 的照片。请解锁手机；还不行就拔插一次数据线。"
+    private var timeoutToken = 0
+
+    /// If the system photo service never answers, don't leave the user waiting.
+    /// Re-armed on every state change, so retries get their own window.
+    private func armTimeout() {
+        timeoutToken += 1
+        let token = timeoutToken
+        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self] in
+            guard let self, token == self.timeoutToken, self.current != nil, self.status == .opening else { return }
+            PBLog.write("photos: timed out waiting for catalog")
+            self.status = .failed("iPhone 的照片服务没有响应。请拔插一次数据线后再试。")
+        }
+    }
 
     func close() {
         if let c = current, c.hasOpenSession { c.requestCloseSession() }
@@ -128,21 +142,28 @@ final class IOSPhotoLibrary: NSObject, ObservableObject {
             list.append(Item(id: id, name: f.name ?? "?", date: f.creationDate, size: Int64(f.fileSize),
                              isVideo: uti.contains("movie") || uti.contains("video")))
         }
-        // Right after another app (or a previous PhoneBridge) closed its session, the phone can
-        // report a complete but empty catalog. Reopen a few times before believing it.
-        if list.isEmpty && emptyRetries < 4 {
-            emptyRetries += 1
-            status = .opening
-            if cam.hasOpenSession { cam.requestCloseSession() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self, weak cam] in
-                guard let self, let cam, cam === self.current else { return }
-                cam.requestOpenSession()
-            }
-            return
-        }
         files = map
-        items = list.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+        // Some files carry garbage dates (seen: year 5828963); sort those last, not first.
+        let latest = Date().addingTimeInterval(86_400)
+        func key(_ i: Item) -> Date { guard let d = i.date, d <= latest else { return .distantPast }; return d }
+        items = list.sorted { key($0) > key($1) }
         status = .ready
+        // Right after another process closed its session the phone can report a "complete" but
+        // empty catalog; items usually follow via didAdd. If still empty after a while, reopen once.
+        if list.isEmpty && emptyRetries == 0 {
+            emptyRetries = 1
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self, weak cam] in
+                guard let self, let cam, cam === self.current, self.items.isEmpty else { return }
+                PBLog.write("photos: catalog still empty, reopening")
+                self.status = .opening
+                cam.requestCloseSession()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak cam] in
+                    guard let self, let cam, cam === self.current else { return }
+                    cam.requestOpenSession()
+                    self.armTimeout()
+                }
+            }
+        }
     }
 }
 
@@ -150,16 +171,38 @@ extension IOSPhotoLibrary: ICDeviceBrowserDelegate {
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didAdd device: ICDevice, moreComing: Bool) {
         onMain { [self] in
             guard let cam = device as? ICCameraDevice, Self.isApple(cam) else { return }
+            PBLog.write("photos: device added \(cam.name ?? "?")")
             cameras.append(cam)
             cameraNames = cameras.compactMap(\.name)
+            if let name = reconnectName, cam.name == name {
+                reconnectName = nil
+                PBLog.write("photos: reconnecting \(name) (attempt \(reconnects))")
+                // Give the system photo service a moment before reopening.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                    guard let self, self.status == .opening, self.current == nil else { return }
+                    self.open(name: name, keepRetryCount: true)
+                }
+            }
         }
     }
 
     nonisolated func deviceBrowser(_ browser: ICDeviceBrowser, didRemove device: ICDevice, moreGoing: Bool) {
         onMain { [self] in
+            if Self.isApple(device) { PBLog.write("photos: device removed \(device.name ?? "?")") }
             cameras.removeAll { $0 === device }
             cameraNames = cameras.compactMap(\.name)
-            if current === device { close() }
+            guard current === device else { return }
+            let name = device.name ?? ""
+            close()
+            if reconnects < 3 {
+                // The system photo service dropped the phone (it comes back within seconds).
+                reconnects += 1
+                reconnectName = name
+                status = .opening
+                armTimeout()
+            } else {
+                status = .failed("iPhone 的照片连接反复断开。请拔插一次数据线后再试。")
+            }
         }
     }
 }
@@ -167,20 +210,26 @@ extension IOSPhotoLibrary: ICDeviceBrowserDelegate {
 extension IOSPhotoLibrary: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegate {
     nonisolated func device(_ device: ICDevice, didOpenSessionWithError error: Error?) {
         onMain { [self] in
-            guard device === current, let error else { return }
+            guard device === current else { return }
+            guard let error else { PBLog.write("photos: session opened"); return }
             let ns = error as NSError
-            // -9943: device locked. Wait for the access-restriction-removed callback.
-            if ns.code == -9943 { status = .locked; return }
+            PBLog.write("photos: open error \(ns.domain) \(ns.code) \(ns.localizedDescription) hasOpenSession=\(device.hasOpenSession)")
+            // -9943 "please unlock": the phone reports this on every open and then sends
+            // "access restriction removed" a moment later if it is actually unlocked.
+            if ns.code == -9943 { if status == .opening { status = .locked }; return }
+            // The session is open anyway (e.g. left from the unlock handshake): just wait for the catalog.
+            if device.hasOpenSession { armTimeout(); return }
             // A session left over from a process that just quit is released within seconds; retry.
-            if emptyRetries < 4, let cam = device as? ICCameraDevice {
+            if emptyRetries < 3, let cam = device as? ICCameraDevice {
                 emptyRetries += 1
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak cam] in
-                    guard let self, let cam, cam === self.current else { return }
+                    guard let self, let cam, cam === self.current, !cam.hasOpenSession else { return }
                     cam.requestOpenSession()
+                    self.armTimeout()
                 }
                 return
             }
-            status = .failed(error.localizedDescription)
+            status = .failed("打不开 iPhone 的照片：\(error.localizedDescription)。请拔插一次数据线后再试。")
         }
     }
 
@@ -190,20 +239,33 @@ extension IOSPhotoLibrary: ICCameraDeviceDelegate, ICCameraDeviceDownloadDelegat
     nonisolated func deviceDidBecomeReady(withCompleteContentCatalog device: ICCameraDevice) {
         onMain { [self] in
             guard device === current else { return }
+            PBLog.write("photos: catalog ready items=\(device.mediaFiles?.count ?? -1)")
             reloadCatalog(device)
         }
     }
 
     nonisolated func cameraDeviceDidEnableAccessRestriction(_ device: ICDevice) {
-        onMain { [self] in if device === current { status = .locked } }
+        onMain { [self] in
+            guard device === current else { return }
+            PBLog.write("photos: access restricted (locked)")
+            if status != .ready { status = .locked }
+        }
     }
 
     nonisolated func cameraDeviceDidRemoveAccessRestriction(_ device: ICDevice) {
         onMain { [self] in
             guard device === current, let cam = device as? ICCameraDevice else { return }
+            PBLog.write("photos: access restriction removed (unlocked) hasOpenSession=\(cam.hasOpenSession)")
+            if status == .ready { return }
+            // Don't close and reopen here: the catalog normally arrives on its own right after
+            // unlock. Only ask again if nothing has happened after a few seconds.
             status = .opening
-            if cam.hasOpenSession { cam.requestCloseSession() }
-            cam.requestOpenSession()
+            armTimeout()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self, weak cam] in
+                guard let self, let cam, cam === self.current, self.status == .opening, !cam.hasOpenSession else { return }
+                PBLog.write("photos: no session 3s after unlock, requesting open")
+                cam.requestOpenSession()
+            }
         }
     }
 

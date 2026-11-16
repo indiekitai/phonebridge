@@ -111,6 +111,8 @@ enum SelfTest {
                 case .failure(let e): log("PHOTO IMPORT FAIL \(e.localizedDescription)")
                 }
             }
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            log("PHOTOS 20s later status=\(store.photos.status) items=\(store.photos.items.count)")
             store.photos.close()
         }
 
