@@ -74,7 +74,7 @@ final class DeviceStore: ObservableObject {
     }
 
     func refresh() {
-        let iosNow = IOSCapture.currentDevices().map { IOSDevice(id: $0.uniqueID, name: $0.localizedName) }
+        let iosNow = IOSCapture.currentDevices().map { IOSDevice(id: $0.uniqueID, name: DemoMode.isOn ? "iPhone" : $0.localizedName) }
         if iosNow != ios { ios = iosNow }
 
         guard let adb, !polling else { pruneSelection(); return }

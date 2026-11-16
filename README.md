@@ -7,6 +7,8 @@ A small native macOS app for the two things you keep opening Android Studio (or 
 
 No Xcode project, no dependencies beyond `adb` for Android.
 
+![PhoneBridge taking an iPhone screenshot](docs/screenshot.png)
+
 > 中文说明见下方。
 
 ## Requirements
@@ -54,6 +56,8 @@ cat /tmp/pb-selftest/report.txt
 ```
 
 Screenshots every connected device, does an upload / list / download round trip on each Android device (in `/sdcard/Download/phonebridge-selftest/`, removed afterwards), opens the iPhone photo library, then quits. Unit tests: `swift test`.
+
+For README-style screenshots, `open -n /Applications/PhoneBridge.app --args --demo` shows iPhones as just "iPhone", hides Android serials and IP addresses, and takes one iPhone screenshot.
 
 ## License
 

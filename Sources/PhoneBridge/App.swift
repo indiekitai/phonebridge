@@ -16,6 +16,9 @@ struct PhoneBridgeApp: App {
                     if let out = SelfTest.outputDirectory {
                         Task { await SelfTest.run(store: store, out: out) }
                     }
+                    if DemoMode.isOn {
+                        Task { await DemoMode.run(store: store) }
+                    }
                 }
         }
         .commands {

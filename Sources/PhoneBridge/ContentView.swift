@@ -30,7 +30,7 @@ struct Sidebar: View {
                 ForEach(store.android) { d in
                     VStack(alignment: .leading, spacing: 2) {
                         Label(d.displayName, systemImage: "candybarphone")
-                        Text(d.isReady ? d.serial : "\(d.serial) · \(stateText(d.state))")
+                        Text(d.isReady ? connection(d) : "\(connection(d)) · \(stateText(d.state))")
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     .tag(DeviceRef.android(d.serial))
@@ -47,6 +47,12 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
+    }
+
+    /// The serial, or in demo mode just how it is connected (serials and IPs stay out of screenshots).
+    private func connection(_ d: AndroidDevice) -> String {
+        guard DemoMode.isOn else { return d.serial }
+        return d.serial.contains(":") ? "Wi‑Fi" : "USB"
     }
 
     private func stateText(_ s: String) -> String {
