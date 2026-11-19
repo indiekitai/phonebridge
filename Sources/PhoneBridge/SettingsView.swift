@@ -7,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.saveDirectory) private var saveDirectory = Defaults.saveDirectory
     @AppStorage(SettingsKey.copyToClipboard) private var copyToClipboard = true
     @AppStorage(SettingsKey.adbPath) private var adbPath = ""
+    @AppStorage(SettingsKey.hdcPath) private var hdcPath = ""
     @AppStorage(SettingsKey.maxEdge) private var maxEdge = Downscale.defaultMaxEdge
 
     var body: some View {
@@ -44,6 +45,17 @@ struct SettingsView: View {
                 }
                 Button("重新查找") { store.relocateADB() }
                 Text("留空时按终端的 PATH 查找 adb，和终端用同一个，避免版本不同把正在运行的 adb 服务重启。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("hdc（鸿蒙 NEXT）") {
+                TextField("hdc 路径", text: $hdcPath, prompt: Text("留空自动查找"))
+                    .onSubmit { store.relocateHDC() }
+                LabeledContent("正在使用") {
+                    Text(store.hdcPath ?? "没找到").foregroundStyle(store.hdcPath == nil ? .red : .secondary)
+                        .textSelection(.enabled)
+                }
+                Button("重新查找") { store.relocateHDC() }
+                Text("留空时先按终端的 PATH 查找，再试 DevEco Studio、OpenHarmony SDK 的常见位置；找不到就在这里填路径。只有鸿蒙 NEXT 设备需要；鸿蒙 4 及更早的华为设备走 adb。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -5,6 +5,7 @@ import SwiftUI
 enum DeviceRef: Hashable {
     case android(String)
     case ios(String)
+    case harmony(String)
 }
 
 struct IOSDevice: Hashable, Identifiable {
@@ -16,6 +17,7 @@ enum SettingsKey {
     static let saveDirectory = "saveDirectory"
     static let copyToClipboard = "copyToClipboard"
     static let adbPath = "adbPath"
+    static let hdcPath = "hdcPath"
     static let maxEdge = "screenshotMaxEdge"
 }
 
@@ -37,6 +39,11 @@ final class DeviceStore: ObservableObject {
     @Published private(set) var displays: [String: [String]] = [:]
     @Published private(set) var adbPath: String?
     @Published private(set) var adbError: String?
+    @Published private(set) var harmony: [HarmonyDevice] = []
+    /// Product name per hdc connect key, looked up once per device.
+    @Published private(set) var harmonyNames: [String: String] = [:]
+    @Published private(set) var hdcPath: String?
+    @Published private(set) var hdcError: String?
     @Published var selection: DeviceRef?
     /// Last screenshot per device, so switching devices keeps the preview.
     @Published var lastShot: [DeviceRef: URL] = [:]
@@ -44,8 +51,10 @@ final class DeviceStore: ObservableObject {
     let photos = IOSPhotoLibrary()
     private var timer: Timer?
     private var polling = false
+    private var pollingHDC = false
 
     var adb: ADBClient? { adbPath.map(ADBClient.init(path:)) }
+    var hdc: HDCClient? { hdcPath.map(HDCClient.init(path:)) }
 
     /// Used by the self test so it never changes the user's saved setting.
     var saveDirectoryOverride: URL?
@@ -59,6 +68,7 @@ final class DeviceStore: ObservableObject {
     func start() {
         IOSCapture.enableScreenCaptureDevices()
         relocateADB()
+        relocateHDC()
         timer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
@@ -78,10 +88,53 @@ final class DeviceStore: ObservableObject {
         }
     }
 
+    func relocateHDC() {
+        let override = UserDefaults.standard.string(forKey: SettingsKey.hdcPath)
+        Task.detached {
+            let path = HDCLocator.locate(override: override)
+            await MainActor.run {
+                self.hdcPath = path
+                self.hdcError = path == nil ? HDCError.notFound.localizedDescription : nil
+                self.harmonyNames = [:]
+                self.refresh()
+            }
+        }
+    }
+
     func refresh() {
         let iosNow = IOSCapture.currentDevices().map { IOSDevice(id: $0.uniqueID, name: DemoMode.isOn ? "iPhone" : $0.localizedName) }
         if iosNow != ios { ios = iosNow }
+        refreshHarmony()
+        refreshAndroid()
+    }
 
+    private func refreshHarmony() {
+        guard let hdc, !pollingHDC else { pruneSelection(); return }
+        pollingHDC = true
+        let known = harmonyNames
+        Task.detached {
+            var result: [HarmonyDevice] = []
+            var errMsg: String?
+            var names: [String: String] = [:]
+            do {
+                result = try hdc.devices()
+                for d in result where d.isReady {
+                    if let n = known[d.key] ?? hdc.productName(key: d.key) { names[d.key] = n }
+                }
+            } catch {
+                errMsg = error.localizedDescription
+            }
+            await MainActor.run {
+                self.pollingHDC = false
+                if result != self.harmony { self.harmony = result }
+                if names != self.harmonyNames { self.harmonyNames = names }
+                self.hdcError = errMsg
+                self.pruneSelection()
+            }
+        }
+    }
+
+    private func refreshAndroid() {
         guard let adb, !polling else { pruneSelection(); return }
         polling = true
         let known = displays
@@ -112,11 +165,13 @@ final class DeviceStore: ObservableObject {
             switch sel {
             case .android(let s) where !android.contains(where: { $0.serial == s }): selection = nil
             case .ios(let id) where !ios.contains(where: { $0.id == id }): selection = nil
+            case .harmony(let k) where !harmony.contains(where: { $0.key == k && $0.isReady }): selection = nil
             default: break
             }
         }
         if selection == nil {
             if let first = android.first(where: \.isReady) { selection = .android(first.serial) }
+            else if let first = harmony.first(where: \.isReady) { selection = .harmony(first.key) }
             else if let first = ios.first { selection = .ios(first.id) }
         }
     }
@@ -125,6 +180,7 @@ final class DeviceStore: ObservableObject {
         switch ref {
         case .android(let s): return android.first { $0.serial == s }?.displayName ?? s
         case .ios(let id): return ios.first { $0.id == id }?.name ?? "iPhone"
+        case .harmony(let k): return harmonyNames[k] ?? k
         }
     }
 
@@ -141,6 +197,9 @@ final class DeviceStore: ObservableObject {
             raw = try await Task.detached { try adb.screenshot(serial: serial, display: display) }.value
         case .ios(let id):
             raw = try await IOSCapture.screenshot(deviceID: id)
+        case .harmony(let key):
+            guard let hdc else { throw HDCError.notFound }
+            raw = try await Task.detached { try hdc.screenshot(key: key) }.value
         }
         let maxEdge = Defaults.maxEdge
         let png = await Task.detached { Downscale.png(raw, maxEdge: maxEdge) }.value

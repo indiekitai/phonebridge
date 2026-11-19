@@ -29,11 +29,14 @@ enum SelfTest {
         var firstPhotoChannel: Double?
 
         // Wait for discovery.
-        for _ in 0..<20 where store.adbPath == nil || store.android.isEmpty || store.ios.isEmpty {
+        for _ in 0..<20 where store.adbPath == nil || store.android.isEmpty || store.ios.isEmpty
+            || store.hdcPath == nil || store.harmony.isEmpty {
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         log("adb=\(store.adbPath ?? "nil") error=\(store.adbError ?? "-")")
         log("android=\(store.android.map { "\($0.displayName)[\($0.state)] displays=\(store.displays[$0.serial] ?? [])" })")
+        log("hdc=\(store.hdcPath ?? "nil") error=\(store.hdcError ?? "-")")
+        log("harmony=\(store.harmony.map { "\(store.harmonyNames[$0.key] ?? $0.key)[\($0.state)]" })")
         log(String(format: "ios=%@ photoChannels=%@ at %.1fs", "\(store.ios.map(\.name))", "\(store.photos.cameraNames)", Date().timeIntervalSince(t0)))
 
         // Real save directory (default is under Desktop, which may trigger a folder-access prompt).
@@ -54,6 +57,7 @@ enum SelfTest {
             let ds = store.displays[d.serial] ?? []
             if ds.count > 1 { ds.forEach { refs.append((.android(d.serial), $0)) } } else { refs.append((.android(d.serial), nil)) }
         }
+        for d in store.harmony where d.isReady { refs.append((.harmony(d.key), nil)) }
         for d in store.ios { refs.append((.ios(d.id), nil)); refs.append((.ios(d.id), nil)) }
 
         for (ref, display) in refs {

@@ -21,6 +21,18 @@ public enum Downscale {
         return (w, h)
     }
 
+    /// PNG data as is; any other image format ImageIO can read (JPEG from hdc) re-encoded as PNG;
+    /// nil for data that isn't a decodable image.
+    public static func toPNG(_ data: Data) -> Data? {
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) { return pixelSize(data) == nil ? nil : data }
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+        let out = NSMutableData()
+        guard let dst = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dst, cg, nil)
+        return CGImageDestinationFinalize(dst) ? out as Data : nil
+    }
+
     /// Returns PNG data whose long edge is at most `maxEdge` pixels, keeping the aspect ratio.
     /// Images already within the limit, `maxEdge <= 0`, or data that can't be decoded
     /// come back unchanged.

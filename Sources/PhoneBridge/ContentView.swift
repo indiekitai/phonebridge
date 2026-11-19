@@ -37,6 +37,20 @@ struct Sidebar: View {
                     .disabled(!d.isReady)
                 }
             }
+            Section("鸿蒙 NEXT") {
+                if store.harmony.isEmpty {
+                    Text(store.hdcError ?? "没有设备").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(store.harmony) { d in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Label(store.harmonyNames[d.key] ?? d.key, systemImage: "smartphone")
+                        Text(d.isReady ? connection(d) : "\(connection(d)) · \(stateText(d.state))")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .tag(DeviceRef.harmony(d.key))
+                    .disabled(!d.isReady)
+                }
+            }
             Section("iPhone") {
                 if store.ios.isEmpty {
                     Text("用 USB 连接并在手机上点「信任」").font(.caption).foregroundStyle(.secondary)
@@ -55,8 +69,14 @@ struct Sidebar: View {
         return d.serial.contains(":") ? "Wi‑Fi" : "USB"
     }
 
+    private func connection(_ d: HarmonyDevice) -> String {
+        guard DemoMode.isOn else { return d.key }
+        return d.connection == "TCP" ? "Wi‑Fi" : "USB"
+    }
+
+    /// adb states are lower case, hdc states capitalised.
     private func stateText(_ s: String) -> String {
-        switch s {
+        switch s.lowercased() {
         case "unauthorized": return "请在设备上允许 USB 调试"
         case "offline": return "离线"
         default: return s
@@ -68,7 +88,7 @@ struct EmptyState: View {
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "cable.connector").font(.system(size: 40)).foregroundStyle(.secondary)
-            Text("连接一台 Android（开 USB 调试）或 iPhone").foregroundStyle(.secondary)
+            Text("连接一台 Android / 鸿蒙（开 USB 调试）或 iPhone").foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
