@@ -16,12 +16,17 @@ enum SettingsKey {
     static let saveDirectory = "saveDirectory"
     static let copyToClipboard = "copyToClipboard"
     static let adbPath = "adbPath"
+    static let maxEdge = "screenshotMaxEdge"
 }
 
 enum Defaults {
     static var saveDirectory: String {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Desktop/PhoneBridge").path
+    }
+    /// Long edge screenshots are shrunk to; 0 keeps the original.
+    static var maxEdge: Int {
+        UserDefaults.standard.object(forKey: SettingsKey.maxEdge) as? Int ?? Downscale.defaultMaxEdge
     }
 }
 
@@ -129,14 +134,16 @@ final class DeviceStore: ObservableObject {
     func screenshot(_ ref: DeviceRef, display: String?) async throws -> URL {
         let dir = saveDirectory
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let png: Data
+        let raw: Data
         switch ref {
         case .android(let serial):
             guard let adb else { throw ADBError.notFound }
-            png = try await Task.detached { try adb.screenshot(serial: serial, display: display) }.value
+            raw = try await Task.detached { try adb.screenshot(serial: serial, display: display) }.value
         case .ios(let id):
-            png = try await IOSCapture.screenshot(deviceID: id)
+            raw = try await IOSCapture.screenshot(deviceID: id)
         }
+        let maxEdge = Defaults.maxEdge
+        let png = await Task.detached { Downscale.png(raw, maxEdge: maxEdge) }.value
         let url = ShotNaming.fileURL(in: dir, device: name(of: ref), display: display)
         try png.write(to: url)
         if UserDefaults.standard.object(forKey: SettingsKey.copyToClipboard) as? Bool ?? true {

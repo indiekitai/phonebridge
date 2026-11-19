@@ -1,4 +1,5 @@
 import AppKit
+import PhoneBridgeCore
 import SwiftUI
 
 struct ScreenshotPane: View {
@@ -93,7 +94,8 @@ struct ScreenshotPane: View {
         do {
             let url = try await store.screenshot(ref, display: displays.count > 1 ? display : nil)
             let secs = String(format: "%.1f", Date().timeIntervalSince(start))
-            message = "\(secs) 秒 · \(copyEnabled ? "已复制 · " : "")\(url.lastPathComponent)"
+            let dims = (try? Data(contentsOf: url)).flatMap(Downscale.pixelSize).map { "\($0.width)×\($0.height) · " } ?? ""
+            message = "\(secs) 秒 · \(dims)\(copyEnabled ? "已复制 · " : "")\(url.lastPathComponent)"
             isError = false
         } catch {
             message = error.localizedDescription

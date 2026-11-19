@@ -1,4 +1,5 @@
 import AppKit
+import PhoneBridgeCore
 import SwiftUI
 
 struct SettingsView: View {
@@ -6,6 +7,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.saveDirectory) private var saveDirectory = Defaults.saveDirectory
     @AppStorage(SettingsKey.copyToClipboard) private var copyToClipboard = true
     @AppStorage(SettingsKey.adbPath) private var adbPath = ""
+    @AppStorage(SettingsKey.maxEdge) private var maxEdge = Downscale.defaultMaxEdge
 
     var body: some View {
         Form {
@@ -23,6 +25,13 @@ struct SettingsView: View {
                     }
                 }
                 Toggle("截图后复制到剪贴板", isOn: $copyToClipboard)
+                Picker("截图尺寸", selection: $maxEdge) {
+                    ForEach(Downscale.choices, id: \.self) { n in
+                        Text(n == 0 ? "原图" : "长边 \(n)").tag(n)
+                    }
+                }
+                Text("贴给 AI 时按像素计费，长边 1000 约是 2000 宽原图的四分之一。小字看不清再调大。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("截图、从 Android 下载的文件、从 iPhone 导入的照片都放在这里。")
                     .font(.caption).foregroundStyle(.secondary)
             }
